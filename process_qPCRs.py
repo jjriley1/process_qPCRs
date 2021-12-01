@@ -1,72 +1,61 @@
 """
 ===========================
-pipeline_rMATS
+process_qPCRs
 ===========================
-
 :Author: Jack Riley
+:Date: 01/12/2021
 
 Overview
 ========
-
-Pipeline to detect differential alternative splicing from RNA-sequencing data
-by using the rMATS software (https://github.com/Xinglab/rmats-turbo/blob/v4.1.1). 
+Pipeline used in the analysis of qPCR data for RNA stability experiments
 
 Usage
 =====
-
 To execute this pipeline in an interactive ShARC session or from a personal
 device (not recommended) use the following command:
 
-"python <path_to_pipeline_folder>/pipeline_rMATS.py make full -v5"
+"python <path_to_pipeline_folder>/process_qPCRs.py make full -v5"
 
 To execute this pipeline to the ShARC cluster, use the following:
 
-"submit_pipeline <path_to_pipeline_folder>/pipeline_rMATS.py make full -v5"
+"submit_pipeline <path_to_pipeline_folder>/process_qPCRs.py make full -v5"
 
 
 Configuration
 =============
-
-In order for pipeline_rMATS to know what comparison to make, 2 important files are required
-(without which the pipeline will not work): 
-
-    - design.tsv = tsv file where each line a comparison of 2 named variables 
-        - example design.tsv can be found at pipeline_rMATS/pipeline_rMATS/design.tsv
-    - file_naming.tsv = tsv file which links the named variables to regex to the files of interest by
-        - example file_naming.tsv can be found at pipeline_rMATS/pipeline_rMATS/file_naming.tsv
+Coming soon...
 
 
 Input files
 ===========
-
-Files are given as .bam format. Usually following completion of pipeline_utrons. (.fastq files can be
-used with rMATS however this has not yet been configured). In order to compare against fixed event sets, 
-files from utron_beds (output from pipeline_utrons) will also be needed.
+csv files placed into inputs.dir folder. Files should be named as follows "$GENENAME_$ISOFORM.csv".
 
 
 Requirements
 ============
-
 Packages required:
+    - Python3
     - cgat/cgatcore
-    - rmats-turbo (v4.1.1 was used during creation of pipeline)
-        - a compatible conda environment has been created and
-        stored in sudlab shared drive ('rmats-env')
+    - R packages:
+        - dplyr
+        - tidyr
+        - stringr
+        - data.table
+        - tibble
+        - ggplot2
 
-These packages are installed in the conda environment "qapa-env".
-R packages for final analysis/reports are installed in "qapa-env-R". 
+All reqs are installed in the conda environment "stem_utrons". 
 
 
 Pipeline output
 ===============
+Outlying techrep/biorep-filtered .csv file with raw CTs per biorep (sem = sem of techreps) --> "$GENENAME/$GENENAME_$ISOFORM_CTs.csv
+Merged 2^-ddCT values --> "$GENENAME/$GENENAME_ddCTs.csv
+RNA stability plot comparing retaining and splicing isoform (normalized to spliced isoform) --> "$GENENAME/$GENENAME_stability_plot.png"
 
-rMATS produces tabular output for each type of alternative splicing event. These will be used by a custom
-Rmarkdown to produce a human-readable summary of the rMATS results. Subsequent data manulation can then be
-conducted manually.
 
 Code
 ====
-
 """
 
 ###################
@@ -89,219 +78,93 @@ from cgatcore import pipeline as P
 import cgatpipelines.tasks.rnaseq as RnaSeq
 import tempfile
 
+############################################
+##### Create a directory for each gene #####
+############################################
 
-############################
-#####       main       #####
-############################
+@follows(mkdir("outputs.dir"))
+@transform("inputs.dir/*.csv", regex("(.+)/(.+)_(.+).csv"), output=r"outputs.dir/\2/\2_\3.csv")
+def create_dir_structure(infile, outfile):
+    folder_name = os.path.dirname(outfile)
+    statement = """mkdir -p %(folder_name)s &&
+                cp %(infile)s %(outfile)s"""
+    to_cluster = False
+    P.run(statement)
 
-PARAMS = P.get_parameters(
-    ["%s/pipeline.yml" % os.path.splitext(__file__)[0],
-     "../pipeline.yml",
-     "pipeline.yml"])
+#########################
+##### RUN R SCRIPTS #####
+#########################
 
-PARAMS.update(P.peek_parameters(
-    PARAMS["annotations_dir"],
-    'genesets',
-    prefix="annotations_",
-    update_interface=True,
-    restrict_interface=True))
-
-PARAMS["project_src"]=os.path.dirname(__file__)
-
-RnaSeq.PARAMS = PARAMS
-
-
-#############################
-##### create prep files #####
-#############################
-# Only do this for the files included in design.tsv
-
-@follows(mkdir("input_in_design"))
-def filter_in_design_matrix():
-    design_matrix = open("design.tsv")
-    design = csv.reader(design_matrix, delimiter="\t")
-    for row in design:
-        comp1 = row[0]
-        comp2 = row[1]
-        print(comp1)
-        print(comp2)
-        file_naming = open("file_naming.tsv")
-        file_names = csv.reader(file_naming, delimiter="\t")
-        for file_row in file_names:
-            for item in file_row:
-                if comp1 in item: 
-                    comp1_files = item.strip(comp1).strip()
-                    os.system("cp -P input/" + comp1_files + " input_in_design/")
-                if comp2 in item:
-                    comp2_files = item.strip(comp2).strip()
-                    os.system("cp -P input/" + comp2_files + " input_in_design/")
-        file_naming.close()
-    design_matrix.close()
-
-@follows(filter_in_design_matrix)
-def checkpaired():
-    #add param lookup to check if paired analysis is being done
-    paired = PARAMS["rmats_paired"]
-    if paired == True :
-        os.system("""for i in input_in_design/*; do
-                        base=${i%-*}
-                        base=${base%-*}
-                        match=`ls ${base}-* | wc -l`
-                        if [ $match -ne 2 ]; then
-                            rm $i
-                        fi
-                    done""")
+@follows(create_dir_structure)
+@transform("outputs.dir/*/*.csv", regex("(.+)/(.+)/(.+)_(.+).csv"), output=r"\1/\2/outlying_techreps_removed/otr_\3_\4.csv")
+def remove_outlying_techreps(infile, outfile):
+    folder_name = os.path.dirname(outfile)
+    current_file = __file__ 
+    pipeline_path = os.path.abspath(current_file)
+    pipeline_directory = os.path.dirname(pipeline_path)
     
-@follows(checkpaired, mkdir("prep"))
-@transform("input_in_design/*.bam", regex("(.+)/(.+)-(.+)-R0.star.bam"), output=r"prep/\2-\3-prep.txt")
-def create_prep_files(infile, outfile):
-    to_cluster=False
-    statement = "echo %(infile)s > %(outfile)s"
+    statement = """mkdir -p %(folder_name)s &&
+                    Rscript %(pipeline_directory)s/remove_outlying_techreps.R %(infile)s %(outfile)s"""
     P.run(statement)
 
-@follows(create_prep_files, mkdir("prep/outputs.dir"), mkdir("post"))
-@transform("prep/*.txt", regex("(.+)/(.+)-(.+)-prep.txt"), output=r"prep/outputs.dir/\2-\3-output_temp")
-def run_prep(infile, outfile):
-    job_threads=4
-    job_memory="16G"
-    job_condaenv="rmats-env"
-    gtf_loc=PARAMS["gtf_path"]
-    paired_reads = PARAMS["reads_paired"]
-    read_length = PARAMS["reads_length"]
-    final_outfile = "post/"
-    star_index = PARAMS["star_index"]
+@follows(remove_outlying_techreps)
+@transform("outputs.dir/*/outlying_techreps_removed/otr_*", regex("(.+)/(.+)/(.+)/otr_(.+)_(.+).csv"), output=r"\1/\2/merged_techreps/merged_\4_\5.csv")
+def merge_techreps(infile, outfile):
+    folder_name = os.path.dirname(outfile)
+    current_file = __file__ 
+    pipeline_path = os.path.abspath(current_file)
+    pipeline_directory = os.path.dirname(pipeline_path)
 
-    if paired_reads == True:
-        statement = """rmats.py --b1 %(infile)s 
-                            --gtf %(gtf_loc)s
-                            -t paired
-                            --readLength %(read_length)s
-                            --nthread %(job_threads)s
-                            --od %(final_outfile)s
-                            --tmp %(outfile)s
-                            --task prep"""
-    if paired_reads == False: 
-         statement = """rmats.py --b1 %(infile)s 
-                            --gtf %(gtf_loc)s
-                            -t single
-                            --readLength %(read_length)s                            
-                            --nthread %(job_threads)s
-                            --od %(final_outfile)s
-                            --tmp %(outfile)s
-                            --task prep"""       
-                        
-    P.run(statement, job_memory=job_memory, job_threads=job_threads, job_condaenv=job_condaenv)
+    statement = """mkdir -p %(folder_name)s &&
+                    Rscript %(pipeline_directory)s/summarize_CTs.R %(infile)s %(outfile)s"""
+    P.run(statement)
 
-@follows(run_prep)
-def create_post_files():
-    #this works best if it is a paired analysis, but if it is not then this function will
-    #still split the post step into 2 files, selecting every other file from the list 
-    #where this is paired, doing so will split the conditions into each post_file.
-        os.system("""ITER=1
-                        for i in input_in_design/*; do
-                            if [ $((ITER%2)) -ne 0 ]
-                            then
-                                if [ $ITER -eq 1 ]
-                                then 
-                                    echo "$i" >> post/condition1_post.txt      
-                                else 
-                                    echo ",$i" >> post/condition1_post.txt  
-                                fi                        
-                            else 
-                                if [ $ITER -eq 2 ]
-                                then 
-                                    echo "$i" >> post/condition2_post.txt      
-                                else 
-                                    echo ",$i" >> post/condition2_post.txt
-                                fi
-                            fi 
-                            ((ITER++))
-                        done
-                        echo $(tr -d '\n' < post/condition1_post.txt) > post/condition1_post.txt 
-                        echo $(tr -d '\n' < post/condition2_post.txt) > post/condition2_post.txt""")
+@follows(merge_techreps)
+@transform("outputs.dir/*/merged_techreps/*.csv", regex("(.+)/(.+)/(.+)/merged_(.+)_(.+).csv"), output=r"\1/\2/outlying_bioreps_removed/obr_\4_\5.csv")
+def remove_outlying_bioreps(infile, outfile):
+    folder_name = os.path.dirname(outfile)
+    current_file = __file__ 
+    pipeline_path = os.path.abspath(current_file)
+    pipeline_directory = os.path.dirname(pipeline_path)
 
-@follows(create_post_files, mkdir("post/tmp/"))
-@transform("prep/outputs.dir/*/*.rmats", regex("prep/outputs.dir/(.+)-(.+)-output_temp/(.+).rmats"), output=r"post/tmp/\1-\2_\3.rmats")
-def copy_rmats_prep(infile, outfile):
-    statement="cp %(infile)s %(outfile)s"
+    statement = """mkdir -p %(folder_name)s &&
+                    Rscript %(pipeline_directory)s/remove_outlying_bioreps.R %(infile)s %(outfile)s"""
+    P.run(statement)    
+
+@follows(remove_outlying_bioreps)
+@collate("outputs.dir/*/outlying_bioreps_removed/obr*", regex("(.+)/(.+)/(.+)/obr_(.+)_(.+).csv"), output=r"\1/\2/ddCT/\4_ddCTs.csv")
+def calc_ddCTs(infile, outfile):
+    folder_name = os.path.dirname(outfile)
+    current_file = __file__ 
+    pipeline_path = os.path.abspath(current_file)
+    pipeline_directory = os.path.dirname(pipeline_path)
+    file1, file2 = infile
+
+    statement = """mkdir -p %(folder_name)s &&
+                    Rscript %(pipeline_directory)s/calc_ddCT.R %(file1)s %(file2)s %(outfile)s"""
     to_cluster=False
     P.run(statement)
 
-@follows(copy_rmats_prep)
-@merge(["post/condition1_post.txt", "post/condition2_post.txt"], "post/post_executed.txt")
-def run_post(infiles, outfile):
-    condition1, condition2 = infiles
-    job_threads=16
-    job_memory="8G"
-    job_condaenv="rmats-env"
-    gtf_loc=PARAMS["gtf_path"]
-    paired_reads = PARAMS["reads_paired"]
-    read_length = PARAMS["reads_length"]
-    paired = PARAMS["rmats_paired"]
-    novel = PARAMS["rmats_detect_novel_ss"]
-    star_index = PARAMS["star_index"]
+@follows(calc_ddCTs)
+@transform("outputs.dir/*/ddCT/*", regex("(.+)/(.+)/(.+)/(.+)_ddCTs.csv"), output=r"\1/\2/\4_stability_plot.png")
+def draw_stability_plot(infile, outfile):
+    folder_name = os.path.dirname(outfile)
+    current_file = __file__ 
+    pipeline_path = os.path.abspath(current_file)
+    pipeline_directory = os.path.dirname(pipeline_path)
 
-    #TO DO , ADD NOVEL SS INTEGRATION
+    statement = """Rscript %(pipeline_directory)s/draw_stability_plots.R %(infile)s %(outfile)s"""
+    to_cluster=False
+    P.run(statement)
 
-    if paired_reads == True:
-        if paired == True:
-            statement = """rmats.py --b1 %(condition1)s
-                            --b2 %(condition2)s 
-                            --gtf %(gtf_loc)s
-                            -t paired
-                            --readLength %(read_length)s
-                            --nthread %(job_threads)s
-                            --od post/
-                            --tmp post/tmp/
-                            --paired-stats
-                            --task post &&
-                            echo "complete" >> post/post_executed.txt"""
-        if paired == False:
-            statement = """rmats.py --b1 %(condition1)s
-                            --b2 %(condition2)s 
-                            --gtf %(gtf_loc)s
-                            -t paired
-                            --readLength %(read_length)s
-                            --nthread %(job_threads)s
-                            --od post/
-                            --tmp post/tmp/
-                            --task post &&
-                            echo "complete" >> post/post_executed.txt"""
-    if paired_reads == False: 
-        if paired == True:
-            statement = """rmats.py --b1 %(condition1)s
-                            --b2 %(condition2)s 
-                            --gtf %(gtf_loc)s
-                            -t single
-                            --readLength %(read_length)s
-                            --nthread %(job_threads)s
-                            --od post/
-                            --tmp post/tmp/
-                            --paired-stats
-                            --task post &&
-                            echo "complete" >> post/post_executed.txt"""
-        if paired == False:
-            statement = """rmats.py --b1 %(condition1)s
-                            --b2 %(condition2)s 
-                            --gtf %(gtf_loc)s
-                            -t single
-                            --readLength %(read_length)s
-                            --nthread %(job_threads)s
-                            --od post/
-                            --tmp post/tmp/
-                            --task post &&
-                            echo "complete" >> post/post_executed.txt"""
-
-    P.run(statement, job_condaenv=job_condaenv, job_memory=job_memory, job_threads=job_threads)
 
 ###################
 ##### utility #####
 ###################
 
-#@follows()
-#def full():
-#    pass
-
+@follows(create_dir_structure, remove_outlying_techreps, merge_techreps, remove_outlying_bioreps, calc_ddCTs, draw_stability_plot)
+def full():
+    pass
 
 ##################
 ###### misc ######
