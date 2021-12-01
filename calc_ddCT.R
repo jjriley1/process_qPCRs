@@ -3,12 +3,21 @@ library(data.table)
 library(dplyr)
 library(tidyr)
 library(tibble)
+library(stringr)
 
-#Load files (spliced is arg[1] retained is arg[2] output is arg[3])
+#Load files (spliced and retained are arg[1:2] output is arg[3])
 file_input = commandArgs(trailingOnly = T)
 
-spliced = fread(file_input[1])
-retained = fread(file_input[2])
+#Function to determine which is spliced vs retained
+if(str_detect(file_input[1], "ss")==TRUE & str_detect(file_input[2], "iu")==TRUE){
+  spliced = fread(file_input[1])
+  retained = fread(file_input[2])
+}
+
+if(str_detect(file_input[1], "iu")==TRUE & str_detect(file_input[2], "ss")==TRUE){
+  retained = fread(file_input[1])
+  spliced = fread(file_input[2])
+}
 
 #Split Name column into the ID data
 spliced = spliced %>% separate(Name, c("gene", "isoform", "time", "rep"), " ")
