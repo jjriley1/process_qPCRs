@@ -43,6 +43,10 @@ retained = retained %>% add_column(dCT0_retained=dCT0_retained)
 spliced = spliced %>% mutate(ddCT = dCT - dCT0_spliced) %>% select(-c(meanCT_spliced, dCT0_spliced))
 retained = retained %>% mutate(ddCT = dCT - dCT0_retained) %>% select(-c(meanCT_spliced, dCT0_retained))
 
+#2^-ddCT calculation
+spliced = spliced %>% mutate(`2^-ddCT`=2^-ddCT)
+retained = retained %>% mutate(`2^-ddCT`=2^-ddCT)
+
 #Output
 output = rbind(spliced, retained)
 

@@ -6,7 +6,7 @@ library(data.table)
 file_input = commandArgs(trailingOnly = T)
 
 #Read as a data.table
-file = fread(file_input)
+file = fread(file_input[1])
 
 #Group by name and get mean and sd
 file = file %>% group_by(Name) %>% summarize(.groups="keep", Name = Name, Ct = Ct, Mean_Ct = mean(Ct), SD_Ct = sd(Ct))
@@ -81,13 +81,9 @@ file = file %>% filter(drop==FALSE)
 file = file[,1:2]
 
 #Output as data.table
-dir.create("outliers_removed")
-fwrite(file, paste0("outliers_removed/no_outliers_",file_input))
+fwrite(file, file_input[2])
 print("Final output:")
 print(file)
 
-#Output log of those removed due to being outlier (also print the rest of the group so it can be verified)
-dir.create("outliers_removed/dropped")
-fwrite(test, paste0("outliers_removed/dropped/dropped_", file_input))
 print("Dropped from final output: (where drop=TRUE)")
 print(test)
