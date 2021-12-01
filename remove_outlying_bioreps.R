@@ -3,6 +3,7 @@ library(dplyr)
 library(data.table)
 library(tidyr)
 library(tibble)
+library(stringr)
 
 #Take file input on command line to allow integration into pipelines (Rscript remove_outlying_techreps.R 'file.csv')
 file_input = commandArgs(trailingOnly = T)
@@ -83,8 +84,9 @@ file = file %>% unite("Name", c(gene, isoform, time, rep), sep=" ")
 
 #Output as data.table
 fwrite(file, file_input[2])
-print("Final output:")
-print(file)
 
-print("Dropped from final output: (where drop=TRUE)")
-print(test)
+#Also output dropped
+file_name = basename(file_input[2])
+directory = dirname(file_input[2])
+dropped_outfile = paste0(directory, "/DROPPED_", file_name)
+fwrite(test, dropped_outfile)
