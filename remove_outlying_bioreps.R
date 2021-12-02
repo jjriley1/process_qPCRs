@@ -12,6 +12,8 @@ file = fread(file_input[1])
 file = file %>% separate(Name, c("gene", "isoform", "time", "rep"), " ")
 #Group by name and get mean and sd
 file_summary = file %>% group_by(time) %>% summarize( Mean_Ct = mean(Ct), SD_Ct = sd(Ct))
+#If there is only 1 techrep left, calculating SD will return NA. We want to force this to be 0
+file_summary = file_summary %>% mutate(SD_Ct=ifelse(is.na(SD_Ct), 0, SD_Ct))
 file = left_join(file, file_summary)
 #Compared to the rest of the data, which sets of technical replicates have abnormally high SDs? 
 SDs = file %>% ungroup %>% select(SD_Ct) %>% distinct() %>% unname() %>% unlist()
